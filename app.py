@@ -1,4 +1,4 @@
-import streamlit as st
+﻿import streamlit as st
 import hashlib
 from supabase import create_client, Client
 from dotenv import load_dotenv
@@ -154,38 +154,50 @@ def create_portabilite_order(numero_porte, code_rio, operateur, numero_provisoir
         today = datetime.now().strftime('%Y-%m-%d')
         
         order_data = {
+            # الخانات التي ستبقى فارغة
             'order_id': order_id,
-            'nom_fr': "Client Portabilité",
-            'prenom_fr': "Portabilité",
-            'nom_ar': "عميل",
-            'prenom_ar': "محافظة الرقم",
-            'city_fr': "-",
-            'city_ar': "-",
-            'adresse_fr': "-",
-            'adresse_ar': "-",
-            'id_type': 'CIN',
-            'id_number': f"PORT-{order_id}",
-            'id_expiry': today,
-            'birth': today,
-            'phone': numero_porte,
-            'email': f"portabilite{order_id}@orange.d2d",
-            'date_creation': today,
-            'vendeur': agent_name,
-            'offre_type': 'PORTABILITE',
-            'offre_name': f"Portabilité - {numero_porte}",
-            'offre_price': "0 DH",
-            'offre_details': f"Portabilité depuis {operateur}",
-            'statut': 'En cours',
-            'router_name': '',
-            'sn_mac': '',
-            'sim_sn': sn_sim,
-            'ligne': numero_provisoire,
-            'numero_porte': numero_porte,
-            'code_rio': code_rio,
-            'operateur_origine': operateur,
+            'nom_fr': "",
+            'prenom_fr': "",
+            'nom_ar': "",
+            'prenom_ar': "",
+            'city_fr': "",
+            'city_ar': "",
+            'adresse_fr': "",
+            'adresse_ar': "",
+            'id_type': "",
+            'id_number': "",
+            'email': "",
+            'birth': "",
+            'router_name': "",
+            'sn_mac': "",
+            'offre_type': "",
+            'offre_price': "",
+            'offre_details': "",
+            'raison_annulation': "",
+            'date_annulation': "",
+            'date_installation': "",
+            'date_activation_finale': "",
+            'id_expiry': "",
+            'date_activation': "",
+            'rapport_activation': "",
+            'rapport_installation': "",
+            
+            # الخانات التي سيتم ملؤها
+            'phone': numero_porte,                      # N° porté
+            'date_creation': today,                     # تاريخ الإنشاء
+            'vendeur': agent_name,                      # اسم المستخدم المسجل دخوله
+            'ligne': numero_porte,                      # N° porté
+            'statut': 'En cours de finalisation',       # حالة الطلب
+            'sim_sn': sn_sim,                           # سريال نمبر
+            'numero_porte': numero_porte,               # N° porté
+            'code_rio': code_rio,                       # Code RIO
+            'operateur_origine': operateur,             # Opérateur origine
+            'numero_provisoire': numero_provisoire,     # Numéro provisoire
+            'type_vente': 'portabilite',                # type_vente
+            'has_forfait': False,                       # FALSE
         }
         
-        supabase.table('orders').insert(order_data).execute()
+        supabase_api('orders', "POST", data=order_data)
         return True, order_id
     except Exception as e:
         print(f"Erreur création portabilité: {e}")
