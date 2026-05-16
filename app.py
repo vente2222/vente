@@ -5,45 +5,42 @@ from datetime import datetime
 import requests
 import json
 
-# محاولة استيراد supabase مع معالجة الخطأ
-try:
-    from supabase import create_client, Client
-    SUPABASE_AVAILABLE = True
-except ImportError:
-    SUPABASE_AVAILABLE = False
-    st.warning("⚠️ Supabase library not found. Please install it using: pip install supabase")
-
-# ==================== إعدادات Supabase من env ====================
+# ==================== إعدادات Supabase عبر API مباشرة ====================
 SUPABASE_URL = os.getenv("SUPABASE_URL", "")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY", "")
 
-# دالة للتواصل مع Supabase باستخدام requests إذا لزم الأمر
-def supabase_request(table, method="select", data=None, eq_column=None, eq_value=None):
-    if not SUPABASE_AVAILABLE:
+def supabase_api(table, method="GET", data=None, match_column=None, match_value=None):
+    """دالة للتواصل مع Supabase عبر REST API مباشرة"""
+    headers = {
+        "apikey": SUPABASE_KEY,
+        "Authorization": f"Bearer {SUPABASE_KEY}",
+        "Content-Type": "application/json"
+    }
+    
+    url = f"{SUPABASE_URL}/rest/v1/{table}"
+    
+    if method == "GET":
+        if match_column and match_value:
+            url += f"?{match_column}=eq.{match_value}"
+        response = requests.get(url, headers=headers)
+    elif method == "POST":
+        response = requests.post(url, headers=headers, json=data)
+    elif method == "PATCH":
+        if match_column and match_value:
+            url += f"?{match_column}=eq.{match_value}"
+        response = requests.patch(url, headers=headers, json=data)
+    elif method == "DELETE":
+        if match_column and match_value:
+            url += f"?{match_column}=eq.{match_value}"
+        response = requests.delete(url, headers=headers)
+    else:
         return None
-    try:
-        from supabase import create_client, Client
-        supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
-        
-        if method == "select":
-            query = supabase.table(table).select("*")
-            if eq_column and eq_value:
-                query = query.eq(eq_column, eq_value)
-            response = query.execute()
-            return response.data
-        elif method == "insert":
-            response = supabase.table(table).insert(data).execute()
-            return response.data
-        elif method == "update":
-            response = supabase.table(table).update(data).eq(eq_column, eq_value).execute()
-            return response.data
-        elif method == "delete":
-            response = supabase.table(table).delete().eq(eq_column, eq_value).execute()
-            return response.data
-    except Exception as e:
-        print(f"Erreur supabase: {e}")
+    
+    if response.status_code in [200, 201]:
+        return response.json()
+    else:
+        print(f"Erreur API: {response.status_code} - {response.text}")
         return None
-    return None
 
 # ==================== إعدادات التطبيق ====================
 st.set_page_config(
@@ -59,7 +56,7 @@ def hash_password(password):
 
 def get_last_order_id():
     try:
-        data = supabase_request('orders', "select")
+        data = supabase_api('orders', "GET")
         if data and len(data) > 0:
             last_id = max([int(o.get('order_id', 0)) for o in data])
             if last_id < 240001:
@@ -72,9 +69,9 @@ def get_last_order_id():
 def verify_login(username, password):
     try:
         password_hash = hash_password(password)
-        users = supabase_request('users', "select", eq_column='username', eq_value=username)
+        users = supabase_api('users', "GET", match_column='username', match_value=username)
         if not users:
-            users = supabase_request('users', "select", eq_column='email', eq_value=username)
+            users = supabase_api('users', "GET", match_column='email', match_value=username)
         if users and len(users) > 0:
             user = users[0]
             stored_hash = user.get('password_hash', '')
@@ -90,7 +87,7 @@ def verify_login(username, password):
 
 def search_lines_by_prefix(prefix):
     try:
-        devices = supabase_request('stock_devices', "select")
+        devices = supabase_api('stock_devices', "GET")
         if not devices:
             return []
         results = []
@@ -102,7 +99,7 @@ def search_lines_by_prefix(prefix):
                 is_sold = False
                 if assigned_order_id:
                     try:
-                        orders = supabase_request('orders', "select", eq_column='order_id', eq_value=assigned_order_id)
+                        orders = supabase_api('orders', "GET", match_column='order_id', match_value=assigned_order_id)
                         if orders and len(orders) > 0:
                             order_status = orders[0].get('statut', '')
                             if order_status not in ['Annulée']:
@@ -170,8 +167,8 @@ def create_order(device_id, ligne, serial_number, price, has_contract, has_forfa
             'ligne': ligne,
         }
         
-        supabase_request('orders', "insert", data=order_data)
-        supabase_request('stock_devices', "update", data={'assigned_order_id': order_id, 'status': 'Réservé'}, eq_column='id', eq_value=device_id)
+        supabase_api('orders', "POST", data=order_data)
+        supabase_api('stock_devices', "PATCH", data={'assigned_order_id': order_id, 'status': 'Réservé'}, match_column='id', match_value=device_id)
         
         return True, order_id
     except Exception as e:
@@ -215,7 +212,7 @@ def create_portabilite_order(numero_porte, code_rio, operateur, numero_provisoir
             'operateur_origine': operateur,
         }
         
-        supabase_request('orders', "insert", data=order_data)
+        supabase_api('orders', "POST", data=order_data)
         return True, order_id
     except Exception as e:
         print(f"Erreur création portabilité: {e}")
@@ -351,13 +348,14 @@ def login_page():
         
         if st.button("Se connecter", use_container_width=True):
             if username and password:
-                success, user = verify_login(username, password)
-                if success:
-                    st.session_state['logged_in'] = True
-                    st.session_state['username'] = user.get('full_name', username.split('@')[0])
-                    go_to_dashboard()
-                else:
-                    st.error("❌ Identifiants incorrects")
+                with st.spinner("Vérification..."):
+                    success, user = verify_login(username, password)
+                    if success:
+                        st.session_state['logged_in'] = True
+                        st.session_state['username'] = user.get('full_name', username.split('@')[0])
+                        go_to_dashboard()
+                    else:
+                        st.error("❌ Identifiants incorrects")
             else:
                 st.warning("Veuillez remplir tous les champs")
 
@@ -383,9 +381,10 @@ def dashboard_page():
         
         if st.button("Rechercher", use_container_width=True, key="search_btn"):
             if search_input and len(search_input) >= 1:
-                st.session_state['search_prefix'] = search_input.strip()
-                st.session_state['search_results'] = search_lines_by_prefix(st.session_state['search_prefix'])
-                st.rerun()
+                with st.spinner("Recherche..."):
+                    st.session_state['search_prefix'] = search_input.strip()
+                    st.session_state['search_results'] = search_lines_by_prefix(st.session_state['search_prefix'])
+                    st.rerun()
     
     if st.session_state['search_results']:
         st.markdown(f"<p><strong>{len(st.session_state['search_results'])}</strong> numéro(s) trouvé(s)</p>", unsafe_allow_html=True)
@@ -413,6 +412,7 @@ def dashboard_page():
                 <div>📭</div>
                 <h4>Aucun résultat</h4>
                 <p>Aucun numéro ne commence par <strong>{st.session_state['search_prefix']}</strong></p>
+                <p>💡 Vérifiez que le numéro a été ajouté au stock via "Ajouter au stock" dans le CRM principal.</p>
             </div>
         """, unsafe_allow_html=True)
     
@@ -445,7 +445,7 @@ def sell_page():
     step = st.session_state.get('sell_step', 1)
     
     if step == 1:
-        st.subheader("Type de vente")
+        st.subheader("📄 Type de vente")
         col1, col2 = st.columns(2)
         with col1:
             if st.button("📑 Avec contrat", use_container_width=True):
@@ -459,7 +459,7 @@ def sell_page():
                 st.rerun()
     
     elif step == 2:
-        st.subheader("Type d'offre")
+        st.subheader("📱 Type d'offre")
         col1, col2 = st.columns(2)
         with col1:
             if st.button("📶 Avec Forfait", use_container_width=True):
@@ -482,8 +482,8 @@ def sell_page():
         
         col1, col2 = st.columns(2)
         with col1:
-            if st.button("✅ Confirmer", use_container_width=True):
-                with st.spinner("Traitement..."):
+            if st.button("✅ Confirmer la vente", use_container_width=True):
+                with st.spinner("Traitement en cours..."):
                     success, order_id = create_order(
                         device['id'], device['ligne'], device['serial_number'], device['price'],
                         st.session_state['sell_contract'],
@@ -493,11 +493,17 @@ def sell_page():
                     if success:
                         st.balloons()
                         st.success(f"✅ Vente confirmée! Commande N°{order_id}")
+                        st.session_state['sell_step'] = 0
+                        st.session_state['sell_contract'] = None
+                        st.session_state['sell_forfait'] = None
                         go_to_dashboard()
                     else:
-                        st.error("❌ Erreur")
+                        st.error("❌ Erreur lors de l'enregistrement de la vente")
         with col2:
             if st.button("❌ Annuler", use_container_width=True):
+                st.session_state['sell_step'] = 0
+                st.session_state['sell_contract'] = None
+                st.session_state['sell_forfait'] = None
                 go_to_dashboard()
 
 # ==================== صفحة البورتابلية ====================
@@ -509,20 +515,21 @@ def portabilite_page():
     st.markdown("""
         <div class="form-card">
             <div class="form-title">🔄 Portabilité</div>
+            <p>Formulaire de portabilité de numéro</p>
         </div>
     """, unsafe_allow_html=True)
     
     numero_porte = st.text_input("📱 N° porté", placeholder="Ex: 0612345678")
-    code_rio = st.text_input("🔑 Code RIO")
+    code_rio = st.text_input("🔑 Code RIO", placeholder="Entrez le code RIO")
     operateur = st.selectbox("🏢 Opérateur actuel", ["", "Orange", "Maroc Telecom", "Inwi"])
-    numero_provisoire = st.text_input("📞 N° provisoire")
-    sn_sim = st.text_input("💳 S/N de carte SIM")
+    numero_provisoire = st.text_input("📞 N° provisoire", placeholder="Numéro temporaire")
+    sn_sim = st.text_input("💳 S/N de carte SIM", placeholder="Numéro de série de la carte SIM")
     
     col1, col2 = st.columns(2)
     with col1:
-        if st.button("✅ Valider", use_container_width=True):
+        if st.button("✅ Valider la portabilité", use_container_width=True):
             if numero_porte and code_rio and operateur and numero_provisoire and sn_sim:
-                with st.spinner("Traitement..."):
+                with st.spinner("Traitement en cours..."):
                     success, order_id = create_portabilite_order(
                         numero_porte, code_rio, operateur, numero_provisoire, sn_sim,
                         st.session_state.get('username', 'Agent')
@@ -532,26 +539,22 @@ def portabilite_page():
                         st.success(f"✅ Portabilité enregistrée! Commande N°{order_id}")
                         go_to_dashboard()
                     else:
-                        st.error("❌ Erreur")
+                        st.error("❌ Erreur lors de l'enregistrement")
             else:
-                st.warning("Veuillez remplir tous les champs")
+                st.warning("⚠️ Veuillez remplir tous les champs")
     with col2:
         if st.button("❌ Annuler", use_container_width=True):
             go_to_dashboard()
 
 # ==================== المدخل الرئيسي ====================
 def main():
-    if not SUPABASE_AVAILABLE:
+    if not SUPABASE_URL or not SUPABASE_KEY:
         st.error("""
         ❌ **Erreur de configuration**
         
-        La librairie Supabase n'est pas installée. Veuillez ajouter la ligne suivante dans votre fichier `requirements.txt`:
+        Les variables d'environnement SUPABASE_URL et SUPABASE_KEY ne sont pas définies.
         
-        ```
-        supabase==1.0.3
-        ```
-        
-        Puis redéployez l'application.
+        Veuillez les ajouter dans le fichier `.env` ou dans les Secrets de Streamlit Cloud.
         """)
         return
     
