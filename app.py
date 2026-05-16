@@ -1,49 +1,16 @@
-import streamlit as st
+﻿import streamlit as st
 import hashlib
+from supabase import create_client, Client
+from dotenv import load_dotenv
 import os
 from datetime import datetime
-import requests
-import json
 
-# محاولة استيراد supabase مع معالجة الخطأ
-try:
-    from supabase import create_client, Client
-    SUPABASE_AVAILABLE = True
-except ImportError:
-    SUPABASE_AVAILABLE = False
-    st.warning("⚠️ Supabase library not found. Please install it using: pip install supabase")
+load_dotenv()
 
-# ==================== إعدادات Supabase من env ====================
-SUPABASE_URL = os.getenv("SUPABASE_URL", "")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY", "")
-
-# دالة للتواصل مع Supabase باستخدام requests إذا لزم الأمر
-def supabase_request(table, method="select", data=None, eq_column=None, eq_value=None):
-    if not SUPABASE_AVAILABLE:
-        return None
-    try:
-        from supabase import create_client, Client
-        supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
-        
-        if method == "select":
-            query = supabase.table(table).select("*")
-            if eq_column and eq_value:
-                query = query.eq(eq_column, eq_value)
-            response = query.execute()
-            return response.data
-        elif method == "insert":
-            response = supabase.table(table).insert(data).execute()
-            return response.data
-        elif method == "update":
-            response = supabase.table(table).update(data).eq(eq_column, eq_value).execute()
-            return response.data
-        elif method == "delete":
-            response = supabase.table(table).delete().eq(eq_column, eq_value).execute()
-            return response.data
-    except Exception as e:
-        print(f"Erreur supabase: {e}")
-        return None
-    return None
+# ==================== إعدادات Supabase ====================
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # ==================== إعدادات التطبيق ====================
 st.set_page_config(
@@ -59,9 +26,9 @@ def hash_password(password):
 
 def get_last_order_id():
     try:
-        data = supabase_request('orders', "select")
-        if data and len(data) > 0:
-            last_id = max([int(o.get('order_id', 0)) for o in data])
+        response = supabase.table('orders').select('order_id').order('order_id', desc=True).limit(1).execute()
+        if response.data and response.data[0].get('order_id'):
+            last_id = response.data[0]['order_id']
             if last_id < 240001:
                 return 240001
             return last_id + 1
@@ -72,11 +39,11 @@ def get_last_order_id():
 def verify_login(username, password):
     try:
         password_hash = hash_password(password)
-        users = supabase_request('users', "select", eq_column='username', eq_value=username)
-        if not users:
-            users = supabase_request('users', "select", eq_column='email', eq_value=username)
-        if users and len(users) > 0:
-            user = users[0]
+        response = supabase.table('users').select('*').eq('username', username).execute()
+        if not response.data:
+            response = supabase.table('users').select('*').eq('email', username).execute()
+        if response.data:
+            user = response.data[0]
             stored_hash = user.get('password_hash', '')
             if stored_hash == password_hash:
                 return True, user
@@ -90,11 +57,11 @@ def verify_login(username, password):
 
 def search_lines_by_prefix(prefix):
     try:
-        devices = supabase_request('stock_devices', "select")
-        if not devices:
+        response = supabase.table('stock_devices').select('*').execute()
+        if not response.data:
             return []
         results = []
-        for device in devices:
+        for device in response.data:
             ligne = device.get('ligne', '')
             assigned_order_id = device.get('assigned_order_id')
             status = device.get('status', 'Non réservé')
@@ -102,9 +69,9 @@ def search_lines_by_prefix(prefix):
                 is_sold = False
                 if assigned_order_id:
                     try:
-                        orders = supabase_request('orders', "select", eq_column='order_id', eq_value=assigned_order_id)
-                        if orders and len(orders) > 0:
-                            order_status = orders[0].get('statut', '')
+                        order_response = supabase.table('orders').select('statut').eq('order_id', assigned_order_id).execute()
+                        if order_response.data:
+                            order_status = order_response.data[0].get('statut', '')
                             if order_status not in ['Annulée']:
                                 is_sold = True
                     except:
@@ -170,8 +137,11 @@ def create_order(device_id, ligne, serial_number, price, has_contract, has_forfa
             'ligne': ligne,
         }
         
-        supabase_request('orders', "insert", data=order_data)
-        supabase_request('stock_devices', "update", data={'assigned_order_id': order_id, 'status': 'Réservé'}, eq_column='id', eq_value=device_id)
+        supabase.table('orders').insert(order_data).execute()
+        supabase.table('stock_devices').update({
+            'assigned_order_id': order_id,
+            'status': 'Réservé'
+        }).eq('id', device_id).execute()
         
         return True, order_id
     except Exception as e:
@@ -215,7 +185,7 @@ def create_portabilite_order(numero_porte, code_rio, operateur, numero_provisoir
             'operateur_origine': operateur,
         }
         
-        supabase_request('orders', "insert", data=order_data)
+        supabase.table('orders').insert(order_data).execute()
         return True, order_id
     except Exception as e:
         print(f"Erreur création portabilité: {e}")
@@ -321,6 +291,10 @@ if 'search_prefix' not in st.session_state:
     st.session_state['search_prefix'] = ""
 
 # ==================== دوال تغيير الصفحات ====================
+def go_to_login():
+    st.session_state['page'] = 'login'
+    st.rerun()
+
 def go_to_dashboard():
     st.session_state['page'] = 'dashboard'
     st.session_state['device_to_sell'] = None
@@ -387,6 +361,7 @@ def dashboard_page():
                 st.session_state['search_results'] = search_lines_by_prefix(st.session_state['search_prefix'])
                 st.rerun()
     
+    # عرض النتائج
     if st.session_state['search_results']:
         st.markdown(f"<p><strong>{len(st.session_state['search_results'])}</strong> numéro(s) trouvé(s)</p>", unsafe_allow_html=True)
         
@@ -444,6 +419,7 @@ def sell_page():
     
     step = st.session_state.get('sell_step', 1)
     
+    # Step 1: Contrat
     if step == 1:
         st.subheader("Type de vente")
         col1, col2 = st.columns(2)
@@ -458,6 +434,7 @@ def sell_page():
                 st.session_state['sell_step'] = 3
                 st.rerun()
     
+    # Step 2: Forfait
     elif step == 2:
         st.subheader("Type d'offre")
         col1, col2 = st.columns(2)
@@ -472,6 +449,7 @@ def sell_page():
                 st.session_state['sell_step'] = 3
                 st.rerun()
     
+    # Step 3: Confirmation
     elif step == 3:
         contract_text = "Avec contrat" if st.session_state['sell_contract'] else "Sans contrat"
         if st.session_state['sell_contract']:
@@ -541,20 +519,6 @@ def portabilite_page():
 
 # ==================== المدخل الرئيسي ====================
 def main():
-    if not SUPABASE_AVAILABLE:
-        st.error("""
-        ❌ **Erreur de configuration**
-        
-        La librairie Supabase n'est pas installée. Veuillez ajouter la ligne suivante dans votre fichier `requirements.txt`:
-        
-        ```
-        supabase==1.0.3
-        ```
-        
-        Puis redéployez l'application.
-        """)
-        return
-    
     if not st.session_state.get('logged_in', False):
         login_page()
     else:
